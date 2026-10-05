@@ -19,6 +19,6 @@ The container needs `git` and internet access to install the library from GitHub
 ## Notes
 
 - Energy sensors use `total_increasing`, so they can be selected in the Energy dashboard.
-- Power is assumed to be in kW; current and voltage are diagnostic entities.
+- Power is reported in W by the API (checked against current and voltage); current and voltage are diagnostic entities.
 - Home Assistant logs a warning that this overrides the core integration. That is expected.
 - Licensed under Apache 2.0, like Home Assistant core.
