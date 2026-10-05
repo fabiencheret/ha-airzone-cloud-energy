@@ -1,0 +1,19 @@
+{
+  "codeowners": [
+    "@fabiencheret"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/fabiencheret/ha-airzone-cloud-energy",
+  "domain": "airzone_cloud",
+  "integration_type": "hub",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/fabiencheret/ha-airzone-cloud-energy/issues",
+  "loggers": [
+    "aioairzone_cloud"
+  ],
+  "name": "Airzone Cloud (Energy Clamp)",
+  "requirements": [
+    "aioairzone-cloud @ git+https://github.com/fabiencheret/aioairzone-cloud.git@3904c8cfe8a18aa7e02700edcf9513a88d0efea8"
+  ],
+  "version": "1.0.0"
+}
