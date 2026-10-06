@@ -18,7 +18,15 @@ The container needs `git` and internet access to install the library from GitHub
 
 ## Notes
 
-- Energy sensors use `total_increasing`, so they can be selected in the Energy dashboard.
+- The cloud API only reports the energy of the **last finished period** (about one hour), not a
+  running total. So the integration adds each new period to a persistent total:
+  - **Total energy consumed** (`total_increasing`): use this one in the Energy dashboard.
+  - **Energy consumed last hour**: the raw per-period value, no state class.
+  - The "returned" equivalents are disabled by default.
+  - Periods that finish while Home Assistant is down are not recovered.
+  - If you used v1.0.x, the old "Energy consumed" entity keeps its entity ID but is now the
+    per-period value; Home Assistant may offer to fix its statistics under Developer tools →
+    Statistics.
 - Power is reported in W by the API (checked against current and voltage); current and voltage are diagnostic entities.
 - Home Assistant logs a warning that this overrides the core integration. That is expected.
 - Licensed under Apache 2.0, like Home Assistant core.

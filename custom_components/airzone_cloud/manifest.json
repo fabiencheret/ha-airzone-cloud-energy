@@ -15,5 +15,5 @@
   "requirements": [
     "aioairzone-cloud @ git+https://github.com/fabiencheret/aioairzone-cloud.git@3904c8cfe8a18aa7e02700edcf9513a88d0efea8"
   ],
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

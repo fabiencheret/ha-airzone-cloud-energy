@@ -1,5 +1,6 @@
 """Support for the Airzone Cloud sensors."""
 
+from datetime import datetime
 from typing import Any, Final, override
 
 from aioairzone_cloud.const import (
@@ -12,6 +13,7 @@ from aioairzone_cloud.const import (
     AZD_CURRENT,
     AZD_ENERGY_ACC,
     AZD_ENERGY_CLAMPS,
+    AZD_ENERGY_PERIOD_END,
     AZD_ENERGY_RET,
     AZD_HUMIDITY,
     AZD_INDOOR_EXCHANGER_TEMP,
@@ -35,6 +37,7 @@ from aioairzone_cloud.const import (
 )
 
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
@@ -55,6 +58,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .coordinator import AirzoneCloudConfigEntry, AirzoneUpdateCoordinator
 from .entity import (
@@ -72,19 +76,20 @@ ENERGY_CLAMP_SENSOR_TYPES: Final[tuple[SensorEntityDescription, ...]] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         state_class=SensorStateClass.MEASUREMENT,
     ),
+    # The API reports the energy of the last finished period, not a running
+    # total, so these have no state class. See ENERGY_CLAMP_TOTAL_TYPES.
     SensorEntityDescription(
         device_class=SensorDeviceClass.ENERGY,
         key=AZD_ENERGY_ACC,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        translation_key="energy_consumed",
+        translation_key="energy_consumed_last_hour",
     ),
     SensorEntityDescription(
         device_class=SensorDeviceClass.ENERGY,
+        entity_registry_enabled_default=False,
         key=AZD_ENERGY_RET,
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        translation_key="energy_returned",
+        translation_key="energy_returned_last_hour",
     ),
     SensorEntityDescription(
         device_class=SensorDeviceClass.CURRENT,
@@ -101,6 +106,55 @@ ENERGY_CLAMP_SENSOR_TYPES: Final[tuple[SensorEntityDescription, ...]] = (
         state_class=SensorStateClass.MEASUREMENT,
     ),
 )
+
+ENERGY_CLAMP_TOTAL_TYPES: Final[tuple[SensorEntityDescription, ...]] = (
+    SensorEntityDescription(
+        device_class=SensorDeviceClass.ENERGY,
+        key=AZD_ENERGY_ACC,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        translation_key="energy_total_consumed",
+    ),
+    SensorEntityDescription(
+        device_class=SensorDeviceClass.ENERGY,
+        entity_registry_enabled_default=False,
+        key=AZD_ENERGY_RET,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        translation_key="energy_total_returned",
+    ),
+)
+
+ATTR_LAST_PERIOD_END: Final = "last_period_end"
+
+
+def accumulate_energy(
+    total: float | None,
+    last_end: datetime | None,
+    energy: float | None,
+    period_end: str | None,
+) -> tuple[float | None, datetime | None]:
+    """Add the energy of a finished period to a running total, once per period.
+
+    The API only reports the last finished period (value + end timestamp), so
+    the total is built by adding each new period when its end timestamp changes.
+    """
+    if energy is None or period_end is None:
+        return total, last_end
+    if (end := dt_util.parse_datetime(period_end)) is None:
+        return total, last_end
+    if last_end is not None and end <= last_end:
+        return total, last_end
+
+    if total is None:
+        new_total = energy
+    elif last_end is None:
+        # Total restored without its period: use this one as baseline only.
+        new_total = total
+    else:
+        new_total = total + energy
+    return round(new_total, 3), end
+
 
 AIDOO_SENSOR_TYPES: Final[tuple[SensorEntityDescription, ...]] = (
     SensorEntityDescription(
@@ -297,6 +351,18 @@ async def async_setup_entry(
         if description.key in clamp_data
     )
 
+    sensors.extend(
+        AirzoneEnergyClampTotalSensor(
+            coordinator,
+            description,
+            clamp_id,
+            clamp_data,
+        )
+        for clamp_id, clamp_data in coordinator.data.get(AZD_ENERGY_CLAMPS, {}).items()
+        for description in ENERGY_CLAMP_TOTAL_TYPES
+        if description.key in clamp_data and AZD_ENERGY_PERIOD_END in clamp_data
+    )
+
     # WebServers
     sensors.extend(
         AirzoneWebServerSensor(
@@ -384,6 +450,67 @@ class AirzoneEnergyClampSensor(AirzoneEnergyClampEntity, AirzoneSensor):
         self.entity_description = description
 
         self._async_update_attrs()
+
+
+class AirzoneEnergyClampTotalSensor(
+    AirzoneEnergyClampEntity, AirzoneSensor, RestoreSensor
+):
+    """Define an Airzone Cloud Energy Clamp running total sensor."""
+
+    def __init__(
+        self,
+        coordinator: AirzoneUpdateCoordinator,
+        description: SensorEntityDescription,
+        clamp_id: str,
+        clamp_data: dict[str, Any],
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, clamp_id, clamp_data)
+
+        self._attr_unique_id = f"{clamp_id}_{description.key}_total"
+        self.entity_description = description
+
+        self._total: float | None = None
+        self._last_period_end: datetime | None = None
+
+    @override
+    async def async_added_to_hass(self) -> None:
+        """Restore the running total before handling the first update."""
+        await super().async_added_to_hass()
+
+        if (
+            last_data := await self.async_get_last_sensor_data()
+        ) is not None and last_data.native_value is not None:
+            try:
+                self._total = float(last_data.native_value)
+            except (TypeError, ValueError):
+                self._total = None
+        if (last_state := await self.async_get_last_state()) is not None and (
+            raw_end := last_state.attributes.get(ATTR_LAST_PERIOD_END)
+        ):
+            self._last_period_end = dt_util.parse_datetime(raw_end)
+
+        self._async_update_attrs()
+
+    @property
+    @override
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return the last period counted in the total."""
+        if self._last_period_end is None:
+            return None
+        return {ATTR_LAST_PERIOD_END: self._last_period_end.isoformat()}
+
+    @callback
+    @override
+    def _async_update_attrs(self) -> None:
+        """Add a newly finished period to the total."""
+        self._total, self._last_period_end = accumulate_energy(
+            self._total,
+            self._last_period_end,
+            self.get_airzone_value(self.entity_description.key),
+            self.get_airzone_value(AZD_ENERGY_PERIOD_END),
+        )
+        self._attr_native_value = self._total
 
 
 class AirzoneWebServerSensor(AirzoneWebServerEntity, AirzoneSensor):

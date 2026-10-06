@@ -53,6 +53,18 @@
       "cpu_usage": {
         "name": "CPU usage"
       },
+      "energy_consumed_last_hour": {
+        "name": "Energy consumed last hour"
+      },
+      "energy_returned_last_hour": {
+        "name": "Energy returned last hour"
+      },
+      "energy_total_consumed": {
+        "name": "Total energy consumed"
+      },
+      "energy_total_returned": {
+        "name": "Total energy returned"
+      },
       "free_memory": {
         "name": "Free memory"
       },
@@ -85,12 +97,6 @@
       },
       "thermostat_coverage": {
         "name": "Signal percentage"
-      },
-      "energy_consumed": {
-        "name": "Energy consumed"
-      },
-      "energy_returned": {
-        "name": "Energy returned"
       }
     }
   }
